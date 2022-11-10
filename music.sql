@@ -1,22 +1,21 @@
-DROP TABLE IF EXISTS owners_to_playlists CASCADE;
+DROP TABLE IF EXISTS measurements CASCADE;
 DROP TABLE IF EXISTS playlists_content CASCADE;
 DROP TABLE IF EXISTS playlists CASCADE;
-DROP TABLE IF EXISTS singer_to_song CASCADE;
+DROP TABLE IF EXISTS songs_info CASCADE;
 DROP TABLE IF EXISTS songs CASCADE;
 DROP TABLE IF EXISTS albums CASCADE;
 DROP DOMAIN IF EXISTS genre CASCADE;
 DROP TABLE IF EXISTS singers CASCADE;
---DROP TABLE IF EXISTS redactors;
 DROP TABLE IF EXISTS users CASCADE;
-
 
 
 
 CREATE TABLE albums
 (
 	album_id		serial NOT NULL	PRIMARY KEY,
-	album_name		text NOT NULL DEFAULT 'untitled',
-	release_date	date NOT NULL DEFAULT CURRENT_DATE
+	album_name		varchar(64) NOT NULL,
+	release_date	date NOT NULL DEFAULT CURRENT_DATE,
+	image_url		text
 );
 
 
@@ -33,13 +32,44 @@ CHECK (
 	) 
 );
 
+
+
+
 CREATE TABLE IF NOT EXISTS songs
 (
 	song_id 			serial NOT NULL PRIMARY KEY,
-	song_name 			text NOT NULL DEFAULT 'untitled',
-	number_of_auditions bigint NOT NULL DEFAULT 0 CHECK (number_of_auditions >= 0),
-	song_genre			Genre,
+	song_name 			varchar(32) NOT NULL DEFAULT 'untitled',
+	song_genre			Genre NOT NULL,
 	release_date		date NOT NULL DEFAULT CURRENT_DATE,
+	audio_url 			varchar(60), -- на самом деле NOT NULL,
+	image_url			varchar(60) -- на самом деле NOT NULL
+	
+);
+
+------------------------------------------------------------------------
+CREATE TABLE users 
+(
+	user_id serial NOT NULL PRIMARY KEY,
+	username VARCHAR(32) NOT NULL DEFAULT 'username', 
+	date_of_birth date NOT NULL CHECK (date_part('year',age(date_of_birth)) >= 16), 
+	avatar_url	  varchar(60) -- 60
+);
+
+
+
+CREATE TABLE singers
+(
+  singer_id serial NOT NULL PRIMARY KEY,		
+  nickname VARCHAR(64) NOT NULL		
+) INHERITS (users);
+
+--------------------------------------------------------------------------
+
+
+CREATE TABLE songs_info
+(
+	singer_id 			int REFERENCES singers(singer_id) NOT NULL,
+	song_id 			int REFERENCES songs(song_id) NOT NULL,
 	album_id			int	REFERENCES albums(album_id)	DEFAULT NULL,
 	position_in_album	int CHECK ( 
 							(album_id IS NOT NULL AND position_in_album > 0) 
@@ -47,51 +77,46 @@ CREATE TABLE IF NOT EXISTS songs
 						)
 );
 
-------------------------------------------------------------------------
-CREATE TABLE users 
-(
-	user_id serial NOT NULL PRIMARY KEY,
-	username VARCHAR(30) NOT NULL DEFAULT 'username',
-	date_of_birth date NOT NULL CHECK (date_part('year',age(date_of_birth)) >= 16)
-);
-
-CREATE TABLE singers
-(
-  singer_id serial NOT NULL PRIMARY KEY,		
-  nickname VARCHAR(60) NOT NULL
-) INHERITS (users);
-
--- CREATE TABLE redactors
--- (
---   redactor_id serial NOT NULL PRIMARY KEY,	
---   nickname VARCHAR(60) NOT NULL	
--- ) INHERITS (users);
-
---------------------------------------------------------------------------
-
-
-CREATE TABLE singer_to_song 
-(
-	singer_id 	int REFERENCES singers(singer_id) NOT NULL,
-	song_id 	int REFERENCES songs(song_id) NOT NULL
-);
-
 -------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS playlists 
 (
 	playlist_id 	serial 		NOT NULL PRIMARY KEY,
-	playlist_name 	varchar(30) NOT NULL DEFAULT 'UNTITLED' CHECK (playlist_name != '')
+	playlist_name 	varchar(32) NOT NULL DEFAULT 'UNTITLED' CHECK (playlist_name != ''),
+	image_url		text
 );
 
 CREATE TABLE IF NOT EXISTS playlists_content 
 (
-	owner_id 	int REFERENCES users(user_id) NOT NULL,
-	playlist_id int REFERENCES playlists(playlist_id) NOT NULL,
-	song_id 	int REFERENCES songs(song_id) DEFAULT NULL -- Реализация пустых плейлистов
+	owner_id 			int REFERENCES users(user_id) NOT NULL,
+	playlist_id 		int REFERENCES playlists(playlist_id) NOT NULL,
+	song_id 			int REFERENCES songs(song_id) DEFAULT NULL, -- Реализация пустых плейлистов
+	number_of_auditions bigint NOT NULL DEFAULT 0 CHECK (number_of_auditions >= 0)
 );
 
 
+--------------------------------------------------------------------------
 
+
+
+CREATE TABLE IF NOT EXISTS measurements 
+(
+	user_id 		int REFERENCES users(user_id) NOT NULL,
+	song_id			int REFERENCES songs(song_id) NOT NULL,
+	logdate 		date NOT NULL DEFAULT CURRENT_DATE,
+	geolocation		point	-- {latitude, longitude}
+) PARTITION BY RANGE(logdate);
+
+
+
+-- Секции таблицы measurements с инфой об активности пользователей
+-- Каждая секция хранит инфу за месяц
+CREATE TABLE measurements_y2022m10 PARTITION OF measurements
+FOR VALUES FROM ('2022-10-01') TO ('2022-11-01');
+ 
+CREATE TABLE measurements_y2022m11 PARTITION OF measurements
+FOR VALUES FROM ('2022-11-01') TO ('2022-12-01');
+ 
+ 
 --------------------------------------------------------------------------
 INSERT INTO users (username, date_of_birth) 
 VALUES 
@@ -105,7 +130,8 @@ INSERT INTO playlists(playlist_name)
 VALUES
 	('mY_co0L_pL@ylist'),
 	('AwesomeMusic'),
-	('playlist_1');
+	('playlist_1')
+;
 
 INSERT INTO singers (username, date_of_birth, nickname)
 VALUES
@@ -113,13 +139,6 @@ VALUES
 	('John', '2000-01-01', 'Twenty one pilots'),
 	('Bob',  '1945-02-06', 'Bob Marley')
 ;
-
-
-
--- INSERT INTO redactors(username, date_of_birth, nickname) VALUES
--- 	('Anton', '1967-03-25', 'GURU'),
--- 	('Bill', '1988-06-15', 'OG')
--- ;
 
 INSERT INTO songs (song_name, song_genre)
 VALUES
@@ -133,170 +152,138 @@ VALUES
 	('Nevermind'),
 	('Toxicity'),
 	('Trench'),
-	('Bob Marley Legacy: Punky Reggae Party')
-;
-
-INSERT INTO songs (song_name, album_id, position_in_album, number_of_auditions, song_genre) 
-VALUES
-	('Sun is Shining', 1, 3, 231, 'reggae'),
-	('Smells like a teen spirit', 1, 4, 321, 'rock')
+	('Bob Marley Legacy: Punky Reggae Party'),
+	('BestOf:System of a Down')
 ;
 
 
-
-INSERT INTO songs (song_name, album_id, position_in_album, number_of_auditions, song_genre) 
+INSERT INTO songs (song_name, song_genre) 
 VALUES
-	('Prison Song', 		2,	 	1,		 1000, 		'heavy metal'),
-	('Needles',				2,	 	2,		 1000, 		'heavy metal'),
-	('Deer Dance',			2,	 	3,		 1000, 		'heavy metal'),
-	('Jet Pilot',			2,	 	4,		 1000, 		'heavy metal'),
-	('X', 					2,	 	5,		 1000, 		'heavy metal'),
-	('Chop Suey!',			2,	 	6,		 1000, 		'heavy metal'),
-	('Bounce',				2,	 	7,		 1000, 		'heavy metal'),
-	('Forest',				2,	 	8,		 1000, 		'heavy metal'),
-	('ATWA', 				2, 	 	9, 	 	 1000, 		'heavy metal'),
-	('Science', 			2,	 	10,	 	 1000, 		'heavy metal'),
-	('Shimmy',				2,	 	11,	 	 1000, 		'heavy metal'),
-	('Toxicity',			2,	 	12,	 	 1000, 		'heavy metal'),
-	('Psycho',				2,	 	13,	 	 1000, 		'heavy metal'),
-	('Aerials', 			2, 	 	14, 	 1000, 		'heavy metal'),
-	('Arto', 				2, 	 	15, 	 1000, 		'heavy metal'),
-	('Protect the land',	NULL, 	NULL,    1012321, 	'heavy metal'),
+	('Sun is Shining', 'reggae'),
+	('Smells like a teen spirit', 'rock'),
+
+	('Prison Song', 	 'heavy metal'),
+	('Needles',			 'heavy metal'),
+	('Deer Dance',		 'heavy metal'),
+	('Jet Pilot',		 'heavy metal'),
+	('X', 				 'heavy metal'),
+	('Chop Suey!',		 'heavy metal'),
+	('Bounce',			 'heavy metal'),
+	('Forest',			 'heavy metal'),
+	('ATWA', 			 'heavy metal'),
+	('Science', 		 'heavy metal'),
+	('Shimmy',			 'heavy metal'),
+	('Toxicity',		 'heavy metal'),
+	('Psycho',			 'heavy metal'),
+	('Aerials', 		 'heavy metal'),
+	('Arto', 			 'heavy metal'),
+	('Protect the land', 'heavy metal'),
 	
-	('Punky Reggae Party',  	4,      1,       500,        'reggae'),
-	('Could You Be Loved ',  	4,      2,       321,        'reggae'),	
-	('Get Up, Stand Up',  		4,      3,       32132,      'reggae'),
-	('Concrete Jungle',  		4,      4,       456654,     'reggae'),	
-	('Stop That Train',  		4,      5,       134245,     'reggae')
+	('Punky Reggae Party',  'reggae'),
+	('Could You Be Loved ', 'reggae'),	
+	('Get Up, Stand Up',  	'reggae'),
+	('Concrete Jungle',  	'reggae'),	
+	('Stop That Train',  	'reggae')
 
 ;
 
 
 
 
--- Все песни из предыдущего INSERT-a исполнили System of a down
-INSERT INTO singer_to_song 
+-- Заполнить табличку c инфой о песнях
+INSERT INTO songs_info (singer_id, song_id, album_id, position_in_album)
 VALUES
-	(1, 6),
-	(1, 7),
-	(1, 8),
-	(1, 9),
-	(1, 10),
-	(1, 11),
-	(1, 12),
-	(1, 13),
-	(1, 14),
-	(1, 15),
-	(1, 16),
-	(1, 17),
-	(1, 18),
-	(1, 19),
-	(1, 20),
-	(1, 21),
+	(1, 6,  2, 1),
+	(1, 7,  2, 2),
+	(1, 8,  2, 3),
+	(1, 9,  2, 4),
+	(1, 10, 2, 5),
+	(1, 11, 2, 6),
+	(1, 12, 2, 7),
+	(1, 13, 2, 8),
+	(1, 14, 2, 9),
+	(1, 15, 2, 10),
+	(1, 16, 2, 11),
+	(1, 17, 2, 12),
+	(1, 18, 2, 13),
+	(1, 19, 2, 14),
+	(1, 20, 2, 15),
 	
-	(3, 22),
-	(3, 23),
-	(3, 24),
-	(3, 25),
-	(3, 26)
+	
+	(1, 16, 5, 1),
+	(1, 20, NULL, NULL),
+	
+	(3, 22, 4, 1),
+	(3, 23, 4, 2),
+	(3, 24, 4, 3),
+	(3, 25, 4, 4),
+	(3, 26, 4, 5),
+	(3, 1, NULL, NULL)
 ;	
 
 
 
-INSERT INTO playlists_content (owner_id, playlist_id, song_id) 
+INSERT INTO playlists_content (owner_id, playlist_id, song_id, number_of_auditions) 
 VALUES 
-	(1, 1, 1),
-	(1, 1, 3),
-	(1, 1, 3),
-	(1, 1, 4),
-	(2, 2, 1)
+	(1, 1, 1, 32),
+	(1, 1, 3, 45),
+	(1, 1, 2, 535),
+	(1, 1, 4, 34),
+	(2, 2, 1, 231)
 ;
 
 
--- Вывод содержимого плейлистов
--- WITH added_owners_info AS (
--- 	SELECT * FROM playlists_content LEFT JOIN users ON users.user_id=playlists_content.owner_id
--- ), added_songs_info AS (
--- 	SELECT * FROM added_owners_info LEFT JOIN songs ON added_owners_info.song_id=songs.song_id
--- ), extended_playlists_content AS (
--- 	SELECT * FROM added_songs_info LEFT JOIN playlists ON added_songs_info.playlist_id=playlists.playlist_id
+
+INSERT INTO  measurements(user_id, song_id, logdate)
+VALUES
+	(1, 12, date('2022-11-1')),
+	(2, 12, date('2022-11-1')),
+	(3, 12, date('2022-11-1')),
+	(1, 12, date('2022-11-1')),
+	(1, 12, date('2022-11-1')),
+	(1, 12, date('2022-11-1')),
+	(2, 1, 	date('2022-11-1')),
+	(2, 1, 	date('2022-11-1')),
+	(2, 13, date('2022-11-1'))
+;
+
+-- Самые популярные жанры пользователя
+-- WITH users_activity AS (
+-- 	SELECT user_id, songs.song_id, logdate, song_name, song_genre
+-- 	FROM measurements_y2022m11 as m LEFT JOIN songs ON m.song_id=songs.song_id
 -- )
--- SELECT username, playlist_name, song_name FROM extended_playlists_content;
+-- SELECT COUNT(1) as audnum , SONG_GENRE
+-- FROM users_activity
+-- where user_id=2
+-- GROUP BY song_genre
+-- ORDER BY audnum DESC;
 
 
 
--- INSERT INTO playlists_content (owner_id, playlist_id, song_id) VALUES
--- 	(1, )
--- ;
-
--- Построить более содержательную вспомогательную таблицу, 
--- по singer_to_song
--- WITH singers_resolved AS (
--- 	SELECT * 
--- 	FROM singer_to_song 
--- 	LEFT JOIN singers 
--- 	ON singer_to_song.singer_id=singers.singer_id
--- ), singers_and_songs_info AS (
--- 	SELECT *
--- 	FROM singers_resolved LEFT JOIN songs
--- 	ON singers_resolved.song_id=songs.song_id
--- ), with_albums_info AS ( -- присоединить инфу об альбомах. Можно выкинуть лишнюю таблицу
--- 	SELECT *
--- 	FROM singers_and_songs_info LEFT JOIN albums
--- 	ON singers_and_songs_info.album_id=albums.album_id
--- )
--- SELECT nickname, song_name, album_name FROM with_albums_info;
-
-
-
--- Посчитать количество прослушиваний альбома Toxicity
--- WITH singers_resolved AS (
--- 	SELECT * 
--- 	FROM singer_to_song 
--- 	LEFT JOIN singers 
--- 	ON singer_to_song.singer_id=singers.singer_id
--- ), singers_and_songs_info AS (
--- 	SELECT *
--- 	FROM singers_resolved LEFT JOIN songs
--- 	ON singers_resolved.song_id=songs.song_id
--- ), with_albums_info AS ( -- присоединить инфу об альбомах. Можно выкинуть лишнюю таблицу
--- 	SELECT *
--- 	FROM singers_and_songs_info LEFT JOIN albums
--- 	ON singers_and_songs_info.album_id=albums.album_id
--- )
--- SELECT SUM(number_of_auditions) AS total_auditions
--- FROM with_albums_info
--- WHERE album_name='Toxicity'
--- GROUP BY album_name;
-
-
--- Попытка в JOIN
--- SELECT songs.song_name, albums.album_name, songs.song_genre
--- FROM songs 
--- LEFT JOIN albums ON songs.album_id = albums.album_id;
+WITH users_activity AS (
+	SELECT user_id, songs.song_id, logdate, song_name, song_genre
+	FROM measurements_y2022m11 as m LEFT JOIN songs ON m.song_id=songs.song_id
+)
+SELECT COUNT(1) as audnum , song_name
+FROM users_activity
+GROUP BY song_name
+ORDER BY audnum  DESC;
 
 
 
 
--- Вывести альбом
--- SELECT albums_info.position_in_album, albums_info.song_name 
--- FROM 
--- 	(SELECT * FROM songs RIGHT JOIN albums ON songs.album_id = albums.album_id) albums_info
--- WHERE 
--- 	albums_info.album_name='Nevermind'
--- ORDER BY albums_info.position_in_album;
 
 
--- Количество прослушиваний альбома
--- SELECT SUM(number_of_auditions)
--- FROM 
--- 	(SELECT * FROM songs RIGHT JOIN albums ON songs.album_id = albums.album_id) albums_info
--- WHERE 
--- 	albums_info.album_name='Nevermind'
 
 
--- SELECT * FROM users;
--- SELECT * FROM singers;
--- SELECT * FROM redactors;
--- SELECT * FROM songs;
+
+
+
+
+
+
+
+
+
+
 
