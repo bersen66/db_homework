@@ -7,7 +7,8 @@ DROP TABLE IF EXISTS albums CASCADE;
 DROP DOMAIN IF EXISTS genre CASCADE;
 DROP TABLE IF EXISTS singers CASCADE;
 DROP TABLE IF EXISTS users CASCADE;
-
+DROP TABLE IF EXISTS users_changelog CASCADE;
+DROP TABLE IF EXISTS songs_changelog CASCADE;
 
 
 CREATE TABLE albums
@@ -68,13 +69,13 @@ CREATE TABLE singers
 
 CREATE TABLE songs_info
 (
-	singer_id 			int REFERENCES singers(singer_id) NOT NULL,
-	song_id 			int REFERENCES songs(song_id) NOT NULL,
-	album_id			int	REFERENCES albums(album_id)	DEFAULT NULL,
+	singer_id 			int REFERENCES singers(singer_id) ON DELETE CASCADE ON UPDATE CASCADE NOT NULL,
+	song_id 			int REFERENCES songs(song_id) ON DELETE CASCADE ON UPDATE CASCADE NOT NULL,
+	album_id			int	REFERENCES albums(album_id)	ON DELETE CASCADE ON UPDATE CASCADE DEFAULT NULL,
 	position_in_album	int CHECK ( 
 							(album_id IS NOT NULL AND position_in_album > 0) 
 						 OR (album_id IS NULL AND position_in_album IS NULL)	
-						)
+						)	
 );
 
 -------------------------------------------------------------------------
@@ -83,13 +84,14 @@ CREATE TABLE IF NOT EXISTS playlists
 	playlist_id 	serial 		NOT NULL PRIMARY KEY,
 	playlist_name 	varchar(32) NOT NULL DEFAULT 'UNTITLED' CHECK (playlist_name != ''),
 	image_url		text
+	
 );
 
 CREATE TABLE IF NOT EXISTS playlists_content 
 (
-	owner_id 			int REFERENCES users(user_id) NOT NULL,
-	playlist_id 		int REFERENCES playlists(playlist_id) NOT NULL,
-	song_id 			int REFERENCES songs(song_id) DEFAULT NULL, -- Реализация пустых плейлистов
+	owner_id 			int REFERENCES users(user_id) 		  ON DELETE CASCADE ON UPDATE CASCADE NOT NULL,
+	playlist_id 		int REFERENCES playlists(playlist_id) ON DELETE CASCADE ON UPDATE CASCADE NOT NULL,
+	song_id 			int REFERENCES songs(song_id)		  ON DELETE CASCADE ON UPDATE CASCADE DEFAULT NULL, -- Реализация пустых плейлистов
 	number_of_auditions bigint NOT NULL DEFAULT 0 CHECK (number_of_auditions >= 0)
 );
 
@@ -100,8 +102,8 @@ CREATE TABLE IF NOT EXISTS playlists_content
 
 CREATE TABLE IF NOT EXISTS measurements 
 (
-	user_id 		int REFERENCES users(user_id) NOT NULL,
-	song_id			int REFERENCES songs(song_id) NOT NULL,
+	user_id 		int REFERENCES users(user_id) ON DELETE CASCADE, 
+	song_id			int	REFERENCES songs(song_id) ON DELETE CASCADE, 
 	logdate 		date NOT NULL DEFAULT CURRENT_DATE,
 	geolocation		point	-- {latitude, longitude}
 ) PARTITION BY RANGE(logdate);
@@ -115,7 +117,7 @@ FOR VALUES FROM ('2022-10-01') TO ('2022-11-01');
  
 CREATE TABLE measurements_y2022m11 PARTITION OF measurements
 FOR VALUES FROM ('2022-11-01') TO ('2022-12-01');
- 
+
  
 --------------------------------------------------------------------------
 INSERT INTO users (username, date_of_birth) 
@@ -208,26 +210,24 @@ VALUES
 	(1, 18, 2, 13),
 	(1, 19, 2, 14),
 	(1, 20, 2, 15),
-	
-	
-	(1, 16, 5, 1),
-	(1, 20, NULL, NULL),
+
+	(1, 1, NULL, NULL),
 	
 	(3, 22, 4, 1),
 	(3, 23, 4, 2),
 	(3, 24, 4, 3),
 	(3, 25, 4, 4),
-	(3, 26, 4, 5),
-	(3, 1, NULL, NULL)
+	(3, 26, 4, 5)
+
 ;	
 
 
 
 INSERT INTO playlists_content (owner_id, playlist_id, song_id, number_of_auditions) 
 VALUES 
-	(1, 1, 1, 32),
-	(1, 1, 3, 45),
-	(1, 1, 2, 535),
+	(1, 1, 10, 32),
+	(1, 1, 13, 45),
+	(1, 1, 12, 535),
 	(1, 1, 4, 34),
 	(2, 2, 1, 231)
 ;
@@ -247,28 +247,270 @@ VALUES
 	(2, 13, date('2022-11-1'))
 ;
 
--- Самые популярные жанры пользователя
--- WITH users_activity AS (
--- 	SELECT user_id, songs.song_id, logdate, song_name, song_genre
--- 	FROM measurements_y2022m11 as m LEFT JOIN songs ON m.song_id=songs.song_id
--- )
--- SELECT COUNT(1) as audnum , SONG_GENRE
--- FROM users_activity
--- where user_id=2
--- GROUP BY song_genre
--- ORDER BY audnum DESC;
+
+
+DROP FUNCTION IF EXISTS AssembleSongsInfo;
+CREATE OR REPLACE FUNCTION AssembleSongsInfo()
+returns
+table (
+	singer_id		INTEGER,
+	song_id			INTEGER,
+	album_id		INTEGER,
+	nickname		VARCHAR,
+	song_name		VARCHAR,
+	song_genre		VARCHAR,
+	album_name		VARCHAR
+) AS $$
+	WITH merged AS (
+		SELECT * 
+		FROM songs_info 
+			LEFT JOIN songs using(song_id) 
+			LEFT JOIN singers using(singer_id) 
+			LEFT JOIN albums using(album_id)
+	) SELECT 
+		singer_id,
+		song_id,
+		album_id,
+		nickname,
+		song_name,	
+		song_genre,	
+		album_name
+	FROM merged;
+$$
+LANGUAGE SQL;
 
 
 
-WITH users_activity AS (
-	SELECT user_id, songs.song_id, logdate, song_name, song_genre
-	FROM measurements_y2022m11 as m LEFT JOIN songs ON m.song_id=songs.song_id
+DROP FUNCTION IF EXISTS AssemblePlaylistContent;
+CREATE FUNCTION AssemblePlaylistContent(id INTEGER) 
+RETURNS TABLE (
+	playlist_id int,
+	song_id int,
+	user_id int,
+	username varchar,
+	song_name varchar
 )
-SELECT COUNT(1) as audnum , song_name
-FROM users_activity
-GROUP BY song_name
-ORDER BY audnum  DESC;
+AS 
+$$
+	WITH merged AS (
+		SELECT * 
+		FROM playlists_content 
+			LEFT JOIN users ON playlists_content.owner_id = users.user_id 
+			LEFT JOIN songs using(song_id)
+			LEFT JOIN playlists USING (playlist_id)
+		WHERE playlist_id = id
+	)
+	SELECT 	
+		playlist_id, song_id, user_id, username, song_name
+	FROM merged;
+$$ 
+LANGUAGE SQL;
 
+
+
+
+
+
+
+
+
+CREATE OR REPLACE PROCEDURE DeleteSingerSongs(id integer)
+AS $$
+
+	with merged AS (
+		SELECT * FROM songs_info WHERE songs_info.singer_id=id
+ 	)
+	DELETE FROM songs 
+	WHERE songs.song_id IN (SELECT merged.song_id FROM merged);
+
+
+	WITH merged AS (
+		SELECT * FROM songs_info WHERE songs_info.singer_id=id
+	) DELETE FROM albums
+	WHERE albums.album_id IN (SELECT album_id FROM merged);
+	
+	DELETE FROM singers WHERE singers.singer_id=id;
+
+$$ LANGUAGE SQL;
+
+
+
+CREATE OR REPLACE PROCEDURE DeleteUser(id INT) 
+AS $$
+
+	DECLARE 
+		entry singers%ROWTYPE;
+	BEGIN
+		FOR entry IN SELECT * FROM singers WHERE singers.user_id=id
+		LOOP
+			CALL DeleteSingerSongs(entry.singer_id);
+		END LOOP;
+	
+		DELETE FROM users WHERE users.user_id=id;
+	END;
+
+-- 	DECLARE curs CURSOR FOR
+-- 			SELECT * FROM singers 
+-- 			WHERE singers.user_id=id;
+-- 		entry singers%ROWTYPE;
+-- 	BEGIN 
+-- 		OPEN curs;
+-- 		LOOP
+-- 			FETCH curs INTO entry;
+-- 			EXIT WHEN NOT FOUND;
+-- 			CALL DeleteSingerSongs(entry.singer_id);
+-- 		END LOOP;
+-- 		CLOSE curs;
+-- 		DELETE FROM users WHERE users.user_id=id;
+-- 	END;
+	
+$$
+LANGUAGE PLPGSQL;
+
+
+-- CALL DeleteUser(5);
+-- SELECT * FROM SONGS;
+
+
+-- CREATE OR REPLACE FUNCTION process_songs_info_audit()
+-- RETURNS TRIGGER
+-- AS $$
+
+-- $$
+-- LANGUAGE PLPGSQL;
+
+-- CREATE OR REPLACE TRIGGER log_update
+-- 	BEFORE UPDATE ON songs_info
+-- 	EXECUTE FUNCTION process_songs_info_audit();
+
+
+
+CREATE TABLE users_changelog(
+	entry_id serial PRIMARY KEY,
+	user_id int REFERENCES users(user_id) ON DELETE CASCADE ON UPDATE CASCADE,
+	logdate date DEFAULT CURRENT_DATE,
+	old_name text NOT NULL,
+	new_name text NOT NULL
+);
+
+
+CREATE OR REPLACE FUNCTION log_users_update_tg()
+RETURNS TRIGGER
+AS
+$$ 
+BEGIN
+	INSERT INTO users_changelog(user_id, old_name, new_name) VALUES (NEW.user_id, OLD.username, NEW.username);
+	SELECT * FROM users_changelog;
+END;
+$$
+LANGUAGE PLPGSQL;
+
+
+CREATE TRIGGER log_update
+    AFTER UPDATE ON users
+    FOR EACH ROW
+    WHEN (OLD.username IS DISTINCT FROM NEW.username)
+    EXECUTE FUNCTION log_users_update_tg();
+
+
+CREATE TABLE songs_changelog(
+	entry_id serial PRIMARY KEY,
+	song_id int REFERENCES songs(song_id) ON DELETE CASCADE ON UPDATE CASCADE,
+	logdate date DEFAULT CURRENT_DATE,
+	old_songname text NOT NULL,
+	new_songname text NOT NULL
+);
+
+
+CREATE OR REPLACE FUNCTION log_songs_update_tg()
+RETURNS TRIGGER
+AS
+$$ 
+BEGIN
+	INSERT INTO songs_changelog(song_id, old_songname, new_songname) VALUES (NEW.song_id, OLD.song_name, NEW.song_name);
+	SELECT * FROM songs_changelog;
+END;
+$$
+LANGUAGE PLPGSQL;
+
+
+CREATE TRIGGER log_songs_update
+    AFTER UPDATE ON songs
+    FOR EACH ROW
+    WHEN (OLD.song_name IS DISTINCT FROM NEW.song_name)
+    EXECUTE FUNCTION  log_songs_update_tg();
+	
+	
+	
+	
+	
+	
+
+
+
+
+
+
+
+
+CREATE OR REPLACE FUNCTION DeleteUserTGG() 
+RETURNS TRIGGER
+AS $$
+BEGIN
+-- 	DECLARE 
+-- 		entry singers%ROWTYPE;
+-- 	BEGIN
+-- 		FOR entry IN SELECT * FROM singers WHERE singers.user_id=OLD.user_id
+-- 		LOOP
+-- 			CALL DeleteSingerSongs(OLD.user_id);
+-- 		END LOOP;
+-- 	END;
+	CALL DeleteUser(OLD.user_id);
+	RETURN NULL;
+END;
+$$
+LANGUAGE PLPGSQL;
+
+
+	
+CREATE  OR REPLACE TRIGGER delete_user
+	BEFORE DELETE ON users
+	EXECUTE FUNCTION DeleteUserTGG();
+
+
+
+
+DELETE FROM users WHERE users.user_id=5;
+-- call DeleteUser(5);
+SELECT * FROM songs;
+
+
+
+
+
+
+-- WITH DECART AS (SELECT * FROM  songs_info CROSS JOIN songs)
+-- SELECT * FROM DECART WHERE song_id  NOT IN (
+-- 	SELECT song_id FROM songs_info LEFT JOIN songs USING(song_id)
+-- );
+
+
+
+-- WITH merged AS (
+-- SELECT * FROM AssembleSongsInfo()
+-- ) 
+
+
+-- SELECT * FROM merged CROSS JOIN playlists_content 
+-- WHERE merged.song_id NOT IN (
+-- 	SELECT song_id FROM playlists_content
+-- );
+
+-- SELECT * FROM songs_info INNER JOIN songs USING(song_id);
+
+
+
+-- SELECT * FROM songs_info LEFT JOIN songs USING(song_id);
 
 
 
